@@ -12,11 +12,13 @@ import base64
 import binascii
 import json
 import signal
+import sys
 
 import websockets
 from google.protobuf import text_format
 from google.protobuf.message import DecodeError
 from rich.console import Console
+from rich.prompt import Prompt
 from rich.traceback import install
 
 install(show_locals=True)
@@ -50,6 +52,9 @@ def decode_and_print_protobuf(encoded_string: str):
 
 
 async def main():
+    # Get symbol from command line argument, default to "BYND" if not provided
+    symbol = sys.argv[1] if len(sys.argv) > 1 else "SPY"
+    old_symbol = symbol
     url = "wss://streamer.finance.yahoo.com/"
 
     params = {"version": "2", "environment": "protobuf"}
@@ -64,21 +69,38 @@ async def main():
 
     console.print(f"[yellow]Connecting to {full_url}[/yellow]")
 
+    shutdown_requested = False
+    unsubscribe_requested = False
+
     async with websockets.connect(
         full_url, additional_headers=headers, ping_interval=20, ping_timeout=20
     ) as websocket:
         console.print("[green]Connected to Yahoo Finance WebSocket[/green]")
 
         def signal_handler():
-            console.print(
-                "\n[yellow]Received shutdown signal, disconnecting...[/yellow]"
-            )
-            asyncio.create_task(websocket.close())
+            nonlocal shutdown_requested
+            nonlocal unsubscribe_requested
+            nonlocal symbol
+            nonlocal old_symbol
+            if not (shutdown_requested or unsubscribe_requested):
+                console.print("\n[yellow]Interrupt...[/yellow]")
+                response = Prompt.ask(
+                    "c(ontinue), q(uit), a(dd)", default="c", choices=["c", "q", "a"]
+                )
+                if response.lower() == "q":
+                    asyncio.create_task(websocket.close())
+                    shutdown_requested = True
+                elif response.lower() == "a":
+                    unsubscribe_requested = True
+                    old_symbol = symbol
+                    symbol = Prompt.ask("Symbol", default="SPY")
+                else:
+                    console.print("[green]Continuing...[/green]")
 
         # Register signal handlers
         loop = asyncio.get_running_loop()
-        for sig in (signal.SIGINT, signal.SIGTERM):
-            loop.add_signal_handler(sig, signal_handler)
+        # for sig in (signal.SIGINT, signal.SIGTERM):
+        loop.add_signal_handler(signal.SIGINT, signal_handler)
 
         # unsubscribe_message = {
         #     "unsubscribe": ["^GSPC","^DJI","^IXIC","^RUT",
@@ -87,18 +109,20 @@ async def main():
         #                     "AVY","HUT","LEU","OKLO",
         #                     "GLXY","CIFR"]
         # }
-        subscribe_message = {
-            "subscribe": [
-                # "AAPL",
-                "TSLA",
-                # "BYND",
-                # "SPY",
-                # "BYND251024C00000500"
-            ]
-        }
+        # subscribe_message = {
+        #     "subscribe": [
+        #         symbol
+        #         # "AAPL",
+        #         # "TSLA",
+        #         # "BYND",
+        #         # "SPY",
+        #         # "BYND251024C00000500"
+        #     ]
+        # }
 
+        console.print(f"[green]Subscribed to [cyan]{symbol}[/cyan][/green]")
+        subscribe_message = {"subscribe": [symbol]}
         await websocket.send(json.dumps(subscribe_message))
-        console.print("[cyan]Sent subscription message[/cyan]")
 
         # input_string = (
         #     "CgNBVlkVSOEwQxiwpPzMwWYqA05ZUTAIOAFFSZ4CQUiKnFploJlVQdgBBA=="
@@ -107,6 +131,20 @@ async def main():
         # decode_and_print_protobuf(input_string)
 
         async for message in websocket:
+            if shutdown_requested:
+                break
+            if unsubscribe_requested:
+                unsubscribe_requested = False
+                unsubscribe_message = {"unsubscribe": [old_symbol]}
+                await websocket.send(json.dumps(unsubscribe_message))
+                subscribe_message = {"subscribe": [symbol]}
+                await websocket.send(json.dumps(subscribe_message))
+                console.clear(home=True)
+                console.print(
+                    f"[yellow]Unsubscribed from [cyan]{old_symbol}[/cyan][/yellow]"
+                )
+                console.print(f"[green]Subscribed to [cyan]{symbol}[/cyan][/green]")
+                continue
             try:
                 console.print(f"[blue]Received text message:[/blue] {message}")
                 json_data = json.loads(message)

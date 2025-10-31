@@ -85,3 +85,31 @@ message PricingData {
   float ytdReturn = 44;
   float qtdReturn = 45;
 }
+
+message StaticData {
+  string id = 1;
+  string displayName = 2;
+  string currency = 3;
+  string exchange = 4;
+  float openPrice = 5;
+  float closePrice = 6;
+  float fiftytwoWkMovingAvgPrice = 7;
+  float twohundredDataMovingAvgPrice = 8;
+}
+
+message PriceUpdate {
+  PricingData pricingData = 1;
+}
+
+message StaticUpdate {
+  StaticData staticData = 1;
+}
+
+message EarningSignals {
+  required string symbol = 1;
+  required sint64 dateTimeInMillis = 2;
+  double epsEstimate = 3;
+  double epsActual = 4;
+  double epsSurprise = 5;
+  double epsSurprisePercent = 6;
+}
