@@ -91,9 +91,9 @@ async def main():
                     asyncio.create_task(websocket.close())
                     shutdown_requested = True
                 elif response.lower() == "a":
-                    unsubscribe_requested = True
                     old_symbol = symbol
-                    symbol = Prompt.ask("Symbol", default="SPY")
+                    symbol = Prompt.ask("symbol", default="SPY")
+                    unsubscribe_requested = True
                 else:
                     console.print("[green]Continuing...[/green]")
 
@@ -129,28 +129,79 @@ async def main():
         # )
         # console.print(f"[cyan]Testing with sample data:[/cyan] {input_string}")
         # decode_and_print_protobuf(input_string)
-
-        async for message in websocket:
-            if shutdown_requested:
-                break
-            if unsubscribe_requested:
-                unsubscribe_requested = False
-                unsubscribe_message = {"unsubscribe": [old_symbol]}
-                await websocket.send(json.dumps(unsubscribe_message))
-                subscribe_message = {"subscribe": [symbol]}
-                await websocket.send(json.dumps(subscribe_message))
-                console.clear(home=True)
-                console.print(
-                    f"[yellow]Unsubscribed from [cyan]{old_symbol}[/cyan][/yellow]"
-                )
-                console.print(f"[green]Subscribed to [cyan]{symbol}[/cyan][/green]")
-                continue
+        async def message_handler():
+            """Handle incoming messages"""
             try:
-                console.print(f"[blue]Received text message:[/blue] {message}")
-                json_data = json.loads(message)
-                decode_and_print_protobuf(json_data["message"])
-            except Exception as e:
-                console.print(f"[red]Error processing message:[/red] {e}")
+                async for message in websocket:
+                    if shutdown_requested:
+                        break
+                    try:
+                        console.print(f"[blue]Received text message:[/blue] {message}")
+                        json_data = json.loads(message)
+                        decode_and_print_protobuf(json_data["message"])
+                    except Exception as e:
+                        console.print(f"[red]Error processing message:[/red] {e}")
+            except websockets.exceptions.ConnectionClosed:
+                console.print("[yellow]WebSocket connection closed[/yellow]")
+
+        async def subscription_handler():
+            """Handle subscription changes"""
+            nonlocal unsubscribe_requested, old_symbol, symbol
+            while not shutdown_requested:
+                if unsubscribe_requested:
+                    unsubscribe_message = {"unsubscribe": [old_symbol]}
+                    console.print(
+                        f"[yellow]Unsubscribing from [cyan]{old_symbol}[/cyan]..."
+                    )
+                    try:
+                        await asyncio.wait_for(
+                            websocket.send(json.dumps(unsubscribe_message)), timeout=5.0
+                        )
+                    except asyncio.TimeoutError:
+                        console.print(
+                            f"[red]Error unsubscribing from [cyan]{old_symbol}[/cyan][/red]"
+                        )
+
+                    subscribe_message = {"subscribe": [symbol]}
+                    try:
+                        await asyncio.wait_for(
+                            websocket.send(json.dumps(subscribe_message)), timeout=5.0
+                        )
+                    except asyncio.TimeoutError:
+                        console.print(
+                            f"[red]Error subscribing to [cyan]{symbol}[/cyan][/red]"
+                        )
+
+                    console.clear(home=True)
+                    console.print(
+                        f"[yellow]Unsubscribed from [cyan]{old_symbol}[/cyan][/yellow]"
+                    )
+                    console.print(f"[green]Subscribed to [cyan]{symbol}[/cyan][/green]")
+                    unsubscribe_requested = False
+
+                await asyncio.sleep(0.1)  # Small delay to prevent busy waiting
+
+        # Run both handlers concurrently
+        message_task = asyncio.create_task(message_handler())
+        subscription_task = asyncio.create_task(subscription_handler())
+
+        # Wait for either task to complete (shutdown or connection close)
+        try:
+            await asyncio.gather(
+                message_task, subscription_task, return_exceptions=True
+            )
+        except Exception as e:
+            console.print(f"[red]Error in main loop:[/red] {e}")
+        finally:
+            # Clean up tasks
+            message_task.cancel()
+            subscription_task.cancel()
+            try:
+                await asyncio.gather(
+                    message_task, subscription_task, return_exceptions=True
+                )
+            except Exception:
+                pass
 
 
 if __name__ == "__main__":
